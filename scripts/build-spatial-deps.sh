@@ -43,7 +43,7 @@ INSTALL_TREE="$OUT_DIR/$TRIPLET"
 MARKER="$OUT_DIR/.spatial-deps-version"
 # Cache key: spatial commit + a recipe tag. Bump the tag whenever the build recipe changes
 # (e.g. the overlay triplet's API level) so a stale tree is rebuilt rather than reused.
-MARKER_VALUE="$SPATIAL_COMMIT-api24"
+MARKER_VALUE="$SPATIAL_COMMIT-api24-rel"
 
 # Cache: skip if already installed for this exact spatial commit + recipe.
 if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$MARKER_VALUE" ] && [ -f "$INSTALL_TREE/lib/libgdal.a" ]; then

@@ -163,16 +163,36 @@ if(EXISTS "${EXT_CONFIG_PATH}")
       list(APPEND CMAKE_FIND_ROOT_PATH "${_SPATIAL_PREFIX}")
       message(STATUS "react-native-duckdb: spatial deps at ${_SPATIAL_PREFIX}")
 
+      # The prebuilt deps ship Release variants only (the Debug .a's are huge and unused —
+      # DuckDB is always built Release here via the wrapper below). Map every build config
+      # to the Release imported target so find_package(GDAL/PROJ/... CONFIG) resolves even
+      # in a Debug app build (e.g. the example app), instead of selecting an absent Debug lib.
+      set(CMAKE_MAP_IMPORTED_CONFIG_DEBUG "Release;")
+      set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO "Release;")
+      set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL "Release;")
+      set(CMAKE_MAP_IMPORTED_CONFIG_ "Release;")
+
       # spatial defaults SPATIAL_USE_NETWORK=ON and only auto-disables it for Emscripten,
       # so on Android it would call find_package(CURL REQUIRED). We deliberately don't build
       # curl (spatial's vcpkg.json guards it with !android), and ST_* geometry functions
       # don't need network drivers — so force it off before the extension is configured.
       set(SPATIAL_USE_NETWORK OFF CACHE BOOL "react-native-duckdb: spatial network drivers off on mobile" FORCE)
 
-      # Static libs to fold into the final .so. Extension link helpers link extensions by
-      # name and don't reliably propagate find_package imported targets, so — like the
-      # httpfs vendor libs — we link these explicitly at final link time.
+      # Fold the spatial native deps (GEOS/PROJ/GDAL/sqlite3/tiff/geotiff/json-c/expat/
+      # openssl/z) into the final .so, wrapped in a --start-group/--end-group so lld (which
+      # is single-pass over archives) resolves their interdependencies (libtiff->libjpeg,
+      # gdal->proj/geos/tiff, ...) regardless of order.
+      #
+      # This group MUST come at the very end of the link line: the spatial extension and
+      # GDAL's find_package imported targets pull libtiff/libgdal/... in ahead of it, and
+      # those archives reference symbols (jpeg/lzma/z) whose providing archives must follow.
+      # CMake offers no way to place items after transitive imported-target libs via
+      # target_link_libraries (and it de-duplicates repeated archives), so we append the
+      # group through CMAKE_CXX_STANDARD_LIBRARIES, which the link rule emits dead last.
       file(GLOB _SPATIAL_LIBS "${_SPATIAL_PREFIX}/lib/*.a")
+      string(REPLACE ";" "," _spatial_libs_csv "${_SPATIAL_LIBS}")
+      set(CMAKE_CXX_STANDARD_LIBRARIES
+        "${CMAKE_CXX_STANDARD_LIBRARIES} -Wl,--start-group,${_spatial_libs_csv},--end-group")
       set(_SPATIAL_ENABLED TRUE)
     endif()
   endif()
@@ -239,16 +259,9 @@ if(_HTTPFS_ENABLED)
   )
 endif()
 
-# Link spatial's native deps (GEOS/PROJ/GDAL/sqlite3/tiff/geotiff/json-c/expat/openssl/z)
-# into our .so. The spatial extension references these symbols, but the extension link
-# helper links extensions by name and doesn't pull the deps in — so we link the vcpkg
-# static libs here. These archives have interdependencies (e.g. libtiff -> libjpeg,
-# gdal -> proj/geos/tiff) and lld is single-pass over archives, so wrap them in a
-# --start-group/--end-group to resolve references regardless of order.
-if(_SPATIAL_ENABLED)
-  target_link_libraries(${CMAKE_PROJECT_NAME}
-    "-Wl,--start-group" ${_SPATIAL_LIBS} "-Wl,--end-group")
-endif()
+# NOTE: spatial's native deps are linked via CMAKE_CXX_STANDARD_LIBRARIES (set in the
+# spatial-detection block above) so the --start-group/--end-group lands at the very end of
+# the link line — after the extension's transitive imported-target archives. See that block.
 
 if (REACTNATIVE_MERGED_SO OR ReactAndroid_VERSION_MINOR GREATER_EQUAL 76)
   target_link_libraries(

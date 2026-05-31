@@ -8,3 +8,5 @@ set(VCPKG_CMAKE_SYSTEM_NAME Android)
 set(VCPKG_CMAKE_SYSTEM_VERSION 24)
 set(VCPKG_MAKE_BUILD_TRIPLET "--host=x86_64-linux-android")
 set(VCPKG_CMAKE_CONFIGURE_OPTIONS -DANDROID_ABI=x86_64)
+# Release only — see the arm64 triplet for rationale (smaller, faster, no debug import-checks).
+set(VCPKG_BUILD_TYPE release)
