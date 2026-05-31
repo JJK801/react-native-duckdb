@@ -108,7 +108,28 @@ mkdir -p "$OUT_DIR"
     --x-install-root="$OUT_DIR" \
     --clean-after-build ) >&2
 
+# Strip debug info from the static libs. Linking only needs their symbol tables, and this
+# shrinks both the final .so and the hosted tarball dramatically (e.g. libgdal.a ~265MB ->
+# ~33MB). Harmless for a Release consumer build (the .so is stripped at package time anyway).
+NDK_HOST_TAG="$(uname -s | tr '[:upper:]' '[:lower:]')-x86_64"
+STRIP_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/${NDK_HOST_TAG}/bin/llvm-strip"
+if [ -x "$STRIP_BIN" ]; then
+  for a in "$INSTALL_TREE"/lib/*.a; do "$STRIP_BIN" --strip-debug "$a" 2>/dev/null || true; done
+fi
+
 echo "$MARKER_VALUE" > "$MARKER"
+
+# Package a tarball for hosting on GitHub Releases, so consumers download prebuilt deps
+# instead of running this ~10-min build (see scripts/download-spatial-deps.sh). The archive
+# holds the "$TRIPLET" dir and is meant to be extracted with `tar -C "$OUT_DIR"`, which
+# round-trips the exact prefix CMake reads ($INSTALL_TREE). COPYFILE_DISABLE avoids macOS
+# AppleDouble (._*) entries. The SHA256SUMS is regenerated from whatever tarballs exist.
+DUCKDB_VERSION="$(cat "$REPO_DIR/package/vendor/duckdb/DUCKDB_VERSION" 2>/dev/null || echo v1.4.4)"
+TARBALL="spatial-deps-${DUCKDB_VERSION}-${ABI}.tar.gz"
+( cd "$OUT_DIR" && COPYFILE_DISABLE=1 tar -czf "$VENDOR_DIR/$TARBALL" "$TRIPLET" )
+( cd "$VENDOR_DIR" && shasum -a 256 spatial-deps-*.tar.gz > SHA256SUMS )
+echo "=== Packaged $VENDOR_DIR/$TARBALL ($(du -h "$VENDOR_DIR/$TARBALL" | cut -f1)) ===" >&2
+
 echo "=== Done: spatial deps installed to $INSTALL_TREE ===" >&2
 # Final stdout line = the install tree (consumed by CMake as CMAKE_PREFIX_PATH).
 echo "$INSTALL_TREE"

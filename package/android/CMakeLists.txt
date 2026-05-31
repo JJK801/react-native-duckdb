@@ -137,8 +137,12 @@ if(EXISTS "${EXT_CONFIG_PATH}")
         set(ENV{ANDROID_NDK_ROOT} "${ANDROID_NDK_FOR_HTTPFS}")
       endif()
 
+      # download-spatial-deps.sh fetches a prebuilt, checksum-verified tarball from the
+      # fork's GitHub Releases (fast path) and falls back to build-spatial-deps.sh (the
+      # ~10-min vcpkg cross-compile) when no prebuilt is available. Both honor the same
+      # install prefix and print it as their final stdout line.
       execute_process(
-        COMMAND bash "${CMAKE_SOURCE_DIR}/../../scripts/build-spatial-deps.sh" android "${ANDROID_ABI}"
+        COMMAND bash "${CMAKE_SOURCE_DIR}/../../scripts/download-spatial-deps.sh" android "${ANDROID_ABI}"
         RESULT_VARIABLE _spatial_deps_result
         OUTPUT_VARIABLE _SPATIAL_PREFIX
         OUTPUT_STRIP_TRAILING_WHITESPACE
