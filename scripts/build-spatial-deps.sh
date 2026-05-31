@@ -41,10 +41,13 @@ esac
 OUT_DIR="$VENDOR_DIR/spatial/android-$ABI"
 INSTALL_TREE="$OUT_DIR/$TRIPLET"
 MARKER="$OUT_DIR/.spatial-deps-version"
+# Cache key: spatial commit + a recipe tag. Bump the tag whenever the build recipe changes
+# (e.g. the overlay triplet's API level) so a stale tree is rebuilt rather than reused.
+MARKER_VALUE="$SPATIAL_COMMIT-api24"
 
-# Cache: skip if already installed for this exact spatial commit.
-if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$SPATIAL_COMMIT" ] && [ -f "$INSTALL_TREE/lib/libgdal.a" ]; then
-  echo "--- spatial deps for android-$ABI: cached (commit ${SPATIAL_COMMIT:0:12}), skipping ---" >&2
+# Cache: skip if already installed for this exact spatial commit + recipe.
+if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$MARKER_VALUE" ] && [ -f "$INSTALL_TREE/lib/libgdal.a" ]; then
+  echo "--- spatial deps for android-$ABI: cached (${MARKER_VALUE:0:12}…/api24), skipping ---" >&2
   echo "$INSTALL_TREE"
   exit 0
 fi
@@ -101,10 +104,11 @@ mkdir -p "$OUT_DIR"
 # vcpkg.json, its ./vcpkg_ports overlay (trimmed GDAL/PROJ/sqlite3), and builtin-baseline.
 ( cd "$SPATIAL_SRC" && "$VCPKG_ROOT/vcpkg" install \
     --triplet "$TRIPLET" \
+    --overlay-triplets="$SCRIPT_DIR/vcpkg-triplets" \
     --x-install-root="$OUT_DIR" \
     --clean-after-build ) >&2
 
-echo "$SPATIAL_COMMIT" > "$MARKER"
+echo "$MARKER_VALUE" > "$MARKER"
 echo "=== Done: spatial deps installed to $INSTALL_TREE ===" >&2
 # Final stdout line = the install tree (consumed by CMake as CMAKE_PREFIX_PATH).
 echo "$INSTALL_TREE"

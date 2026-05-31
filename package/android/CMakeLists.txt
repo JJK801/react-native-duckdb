@@ -242,10 +242,12 @@ endif()
 # Link spatial's native deps (GEOS/PROJ/GDAL/sqlite3/tiff/geotiff/json-c/expat/openssl/z)
 # into our .so. The spatial extension references these symbols, but the extension link
 # helper links extensions by name and doesn't pull the deps in — so we link the vcpkg
-# static libs here. lld resolves inter-archive (circular) dependencies among gdal/proj/geos
-# without needing an explicit --start-group/--end-group.
+# static libs here. These archives have interdependencies (e.g. libtiff -> libjpeg,
+# gdal -> proj/geos/tiff) and lld is single-pass over archives, so wrap them in a
+# --start-group/--end-group to resolve references regardless of order.
 if(_SPATIAL_ENABLED)
-  target_link_libraries(${CMAKE_PROJECT_NAME} ${_SPATIAL_LIBS})
+  target_link_libraries(${CMAKE_PROJECT_NAME}
+    "-Wl,--start-group" ${_SPATIAL_LIBS} "-Wl,--end-group")
 endif()
 
 if (REACTNATIVE_MERGED_SO OR ReactAndroid_VERSION_MINOR GREATER_EQUAL 76)
