@@ -32,6 +32,11 @@ def getExtOrIntegerDefault(name) {
 // Read extensions from gradle.properties (set by Expo config plugin)
 def duckdbExtensions = project.findProperty('RNDuckDB_extensions') ?: ''
 
+// Opt in to linking a prebuilt DuckDB bundle (download instead of the ~8-min DuckDB compile).
+// Set RNDuckDB_prebuiltDuckdb=true in gradle.properties. Falls back to the source build if no
+// matching (version x extensions x ABI) bundle is published.
+def prebuiltDuckdb = (project.findProperty('RNDuckDB_prebuiltDuckdb') ?: 'false').toString().toBoolean() ? 'ON' : 'OFF'
+
 def supportsNamespace() {
   def parsed = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.tokenize('.')
   def major = parsed[0].toInteger()
@@ -73,6 +78,7 @@ android {
           "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
           "-DAPP_ROOT_DIR=${rootProject.projectDir.parentFile.absolutePath}",
           "-DDUCKDB_EXTENSIONS=${duckdbExtensions}",
+          "-DRNDuckDB_PREBUILT_DUCKDB=${prebuiltDuckdb}",
           "-DANDROID_NDK_FOR_HTTPFS=${android.ndkDirectory}"
         abiFilters (*reactNativeArchitectures())
       }

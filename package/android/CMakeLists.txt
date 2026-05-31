@@ -110,6 +110,47 @@ if(EXISTS "${EXT_CONFIG_PATH}")
   endif()
 endif()
 
+# Optional: link a PREBUILT DuckDB bundle (libduckdb_static.a + the extension and third_party
+# .a's) instead of compiling DuckDB (~2000 files) from source. Opt in with the gradle property
+# RNDuckDB_prebuiltDuckdb=true (build.gradle forwards it as -DRNDuckDB_PREBUILT_DUCKDB=ON).
+#
+# The bundle is matched by (DuckDB version x extension-set x ABI): download-duckdb-bundle.sh
+# fetches a checksum-verified tarball from the fork's Releases and prints its lib dir, or exits
+# non-zero — in which case we transparently fall back to the from-source build below. The static
+# extension-registration loader (generated_extension_loader.cpp.o) is baked into the prebuilt
+# libduckdb_static.a, so the extension set is fixed per bundle. 64-bit ABIs only.
+#
+# Placed BEFORE the spatial block on purpose: its link group must precede the spatial-deps group
+# (libspatial_extension.a in this bundle references gdal/geos/proj in the spatial-deps group, and
+# lld resolves forward-references into later inputs).
+set(_USE_PREBUILT_DUCKDB FALSE)
+if(RNDuckDB_PREBUILT_DUCKDB AND NOT "${DUCKDB_EXTENSIONS}" STREQUAL ""
+   AND (ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "x86_64"))
+  if(ANDROID_NDK_FOR_HTTPFS)
+    set(ENV{ANDROID_NDK_ROOT} "${ANDROID_NDK_FOR_HTTPFS}")
+  endif()
+  execute_process(
+    COMMAND bash "${CMAKE_SOURCE_DIR}/../../scripts/download-duckdb-bundle.sh"
+            android "${ANDROID_ABI}" "${DUCKDB_EXTENSIONS}"
+    RESULT_VARIABLE _ddb_bundle_result
+    OUTPUT_VARIABLE _DUCKDB_BUNDLE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(_ddb_bundle_result EQUAL 0 AND EXISTS "${_DUCKDB_BUNDLE_DIR}/libduckdb_static.a")
+    file(GLOB _DUCKDB_BUNDLE_LIBS "${_DUCKDB_BUNDLE_DIR}/*.a")
+    string(REPLACE ";" "," _ddb_libs_csv "${_DUCKDB_BUNDLE_LIBS}")
+    # Prepend (relative to the spatial group, which appends after this) a trailing link group of
+    # all the prebuilt DuckDB .a's. They are interdependent (duckdb_static <-> extensions <->
+    # third_party) and lld is single-pass, so they must be grouped.
+    set(CMAKE_CXX_STANDARD_LIBRARIES
+      "${CMAKE_CXX_STANDARD_LIBRARIES} -Wl,--start-group,${_ddb_libs_csv},--end-group")
+    set(_USE_PREBUILT_DUCKDB TRUE)
+    message(STATUS "react-native-duckdb: using prebuilt DuckDB bundle (${_DUCKDB_BUNDLE_DIR}) — skipping DuckDB source build")
+  else()
+    message(STATUS "react-native-duckdb: no prebuilt DuckDB bundle for this version/extensions/ABI — building DuckDB from source")
+  endif()
+endif()
+
 # Check if spatial is in the config — it needs GEOS/PROJ/GDAL (+ sqlite3/tiff/geotiff/
 # json-c/expat/openssl/zlib), which we cross-compile with vcpkg via
 # scripts/build-spatial-deps.sh. Mirrors the httpfs precedent (build deps, inject paths).
@@ -210,7 +251,11 @@ endif()
 # We use a wrapper subdirectory to scope add_compile_options to DuckDB only.
 # The wrapper's add_compile_options(-O3 -DNDEBUG) applies to DuckDB and its
 # children but NOT to our RNDuckDB target (which is defined in this file).
-add_subdirectory(duckdb-release-wrapper ${CMAKE_CURRENT_BINARY_DIR}/duckdb EXCLUDE_FROM_ALL)
+#
+# Skipped entirely when a prebuilt DuckDB bundle was downloaded above — we link its .a's instead.
+if(NOT _USE_PREBUILT_DUCKDB)
+  add_subdirectory(duckdb-release-wrapper ${CMAKE_CURRENT_BINARY_DIR}/duckdb EXCLUDE_FROM_ALL)
+endif()
 
 # Our library source files
 file(GLOB_RECURSE cpp_files RELATIVE ${CMAKE_SOURCE_DIR}
@@ -239,16 +284,29 @@ find_package(ReactAndroid REQUIRED CONFIG)
 find_package(fbjni REQUIRED CONFIG)
 find_library(LOG_LIB log)
 
-# Link DuckDB static library + extension libraries (same pattern as DuckDB shell)
-target_link_libraries(
-  ${CMAKE_PROJECT_NAME}
-  duckdb_static
-  ${LOG_LIB}
-  android
-  fbjni::fbjni
-  ReactAndroid::jsi
-)
-link_extension_libraries(${CMAKE_PROJECT_NAME} PRIVATE)
+# Link DuckDB static library + extension libraries (same pattern as DuckDB shell).
+# With a prebuilt bundle, duckdb_static + the extension libs come from the bundle link group
+# (CMAKE_CXX_STANDARD_LIBRARIES) instead — and the duckdb_static target / link_extension_libraries
+# function don't exist (add_subdirectory(duckdb) was skipped).
+if(_USE_PREBUILT_DUCKDB)
+  target_link_libraries(
+    ${CMAKE_PROJECT_NAME}
+    ${LOG_LIB}
+    android
+    fbjni::fbjni
+    ReactAndroid::jsi
+  )
+else()
+  target_link_libraries(
+    ${CMAKE_PROJECT_NAME}
+    duckdb_static
+    ${LOG_LIB}
+    android
+    fbjni::fbjni
+    ReactAndroid::jsi
+  )
+  link_extension_libraries(${CMAKE_PROJECT_NAME} PRIVATE)
+endif()
 
 # Link vendor OpenSSL + libcurl static libs into our .so when httpfs is enabled.
 # DuckDB's httpfs extension references OpenSSL/curl symbols but doesn't link them
