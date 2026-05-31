@@ -110,6 +110,74 @@ if(EXISTS "${EXT_CONFIG_PATH}")
   endif()
 endif()
 
+# Check if spatial is in the config — it needs GEOS/PROJ/GDAL (+ sqlite3/tiff/geotiff/
+# json-c/expat/openssl/zlib), which we cross-compile with vcpkg via
+# scripts/build-spatial-deps.sh. Mirrors the httpfs precedent (build deps, inject paths).
+if(EXISTS "${EXT_CONFIG_PATH}")
+  file(READ "${EXT_CONFIG_PATH}" _ext_config_content_spatial)
+  if(_ext_config_content_spatial MATCHES "spatial")
+    # spatial's native deps target 64-bit ABIs only (its vcpkg.json guards curl/network
+    # with !android, and 32-bit Android is effectively extinct since Google's 2019 mandate).
+    if(ANDROID_ABI STREQUAL "armeabi-v7a" OR ANDROID_ABI STREQUAL "x86")
+      message(WARNING "react-native-duckdb: spatial skipped for ${ANDROID_ABI} (64-bit only: arm64-v8a, x86_64). Stripping from extension config.")
+      # Strip spatial so DuckDB doesn't try to build it. Safe: configure-extensions.js
+      # regenerates this file on each CMake invocation (same pattern as httpfs above).
+      file(STRINGS "${EXT_CONFIG_PATH}" _ext_lines)
+      file(WRITE "${EXT_CONFIG_PATH}" "")
+      foreach(_line IN LISTS _ext_lines)
+        if(NOT _line MATCHES "duckdb_extension_load\\(spatial")
+          file(APPEND "${EXT_CONFIG_PATH}" "${_line}\n")
+        endif()
+      endforeach()
+    else()
+      message(STATUS "react-native-duckdb: spatial detected, cross-compiling native deps (GEOS/PROJ/GDAL) for ${ANDROID_ABI}")
+
+      # Reuse the NDK path plumbed for httpfs (build.gradle sets ANDROID_NDK_FOR_HTTPFS).
+      if(ANDROID_NDK_FOR_HTTPFS)
+        set(ENV{ANDROID_NDK_ROOT} "${ANDROID_NDK_FOR_HTTPFS}")
+      endif()
+
+      execute_process(
+        COMMAND bash "${CMAKE_SOURCE_DIR}/../../scripts/build-spatial-deps.sh" android "${ANDROID_ABI}"
+        RESULT_VARIABLE _spatial_deps_result
+        OUTPUT_VARIABLE _SPATIAL_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      if(NOT _spatial_deps_result EQUAL 0)
+        message(FATAL_ERROR "react-native-duckdb: Failed to cross-compile spatial native deps for ${ANDROID_ABI}")
+      endif()
+
+      # The script prints the vcpkg install tree as its final stdout line. Adding it to
+      # CMAKE_PREFIX_PATH lets spatial's find_package(GDAL/PROJ/GEOS/EXPAT/sqlite3/...)
+      # resolve. It propagates into the extension because DuckDB adds out-of-tree
+      # extensions via add_subdirectory in this same configure scope.
+      if(NOT EXISTS "${_SPATIAL_PREFIX}/lib/libgdal.a")
+        message(FATAL_ERROR "react-native-duckdb: spatial deps tree missing libgdal.a at '${_SPATIAL_PREFIX}'")
+      endif()
+      list(APPEND CMAKE_PREFIX_PATH "${_SPATIAL_PREFIX}")
+      # The NDK toolchain sets CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY, which makes
+      # find_package ignore CMAKE_PREFIX_PATH and only search the NDK sysroot. Allow host
+      # paths so spatial's find_package(GDAL/PROJ/GEOS/... CONFIG) resolves our vcpkg tree.
+      # (Library mode stays ONLY — vcpkg's *Config.cmake files reference absolute .a paths.)
+      set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
+      list(APPEND CMAKE_FIND_ROOT_PATH "${_SPATIAL_PREFIX}")
+      message(STATUS "react-native-duckdb: spatial deps at ${_SPATIAL_PREFIX}")
+
+      # spatial defaults SPATIAL_USE_NETWORK=ON and only auto-disables it for Emscripten,
+      # so on Android it would call find_package(CURL REQUIRED). We deliberately don't build
+      # curl (spatial's vcpkg.json guards it with !android), and ST_* geometry functions
+      # don't need network drivers — so force it off before the extension is configured.
+      set(SPATIAL_USE_NETWORK OFF CACHE BOOL "react-native-duckdb: spatial network drivers off on mobile" FORCE)
+
+      # Static libs to fold into the final .so. Extension link helpers link extensions by
+      # name and don't reliably propagate find_package imported targets, so — like the
+      # httpfs vendor libs — we link these explicitly at final link time.
+      file(GLOB _SPATIAL_LIBS "${_SPATIAL_PREFIX}/lib/*.a")
+      set(_SPATIAL_ENABLED TRUE)
+    endif()
+  endif()
+endif()
+
 # Always build DuckDB with Release optimizations (-O3 -DNDEBUG), even for debug
 # app builds. This matches the iOS behavior where DuckDB.xcframework is always
 # pre-built with -DCMAKE_BUILD_TYPE=Release. Without this, AGP maps debug builds
@@ -169,6 +237,15 @@ if(_HTTPFS_ENABLED)
     ${CURL_LIBRARY}
     ${ZLIB_LIB}
   )
+endif()
+
+# Link spatial's native deps (GEOS/PROJ/GDAL/sqlite3/tiff/geotiff/json-c/expat/openssl/z)
+# into our .so. The spatial extension references these symbols, but the extension link
+# helper links extensions by name and doesn't pull the deps in — so we link the vcpkg
+# static libs here. lld resolves inter-archive (circular) dependencies among gdal/proj/geos
+# without needing an explicit --start-group/--end-group.
+if(_SPATIAL_ENABLED)
+  target_link_libraries(${CMAKE_PROJECT_NAME} ${_SPATIAL_LIBS})
 endif()
 
 if (REACTNATIVE_MERGED_SO OR ReactAndroid_VERSION_MINOR GREATER_EQUAL 76)

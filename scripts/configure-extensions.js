@@ -35,6 +35,15 @@ const OUT_OF_TREE_EXTENSIONS = {
     git_url: 'https://github.com/duckdb/duckdb-vss',
     git_tag: '4d07d6e3f6ce87013ae59a24b8d8c6740f2db307',
   },
+  // Pinned to the exact commit DuckDB 1.4.4 builds spatial from
+  // (duckdb/.github/config/extensions/spatial.cmake). spatial pulls native
+  // deps (geos, proj, gdal, ...) via its own vcpkg.json + overlay ports, so the
+  // Android/iOS build must provide a vcpkg toolchain — see package/android/CMakeLists.txt.
+  spatial: {
+    git_url: 'https://github.com/duckdb/duckdb-spatial',
+    git_tag: 'f129b24b4ddd4d98cfc18f88be5a344a79040e7b',
+    include_dir: 'src/spatial',
+  },
 };
 
 const ALL_VALID = [...IN_TREE_EXTENSIONS, ...Object.keys(OUT_OF_TREE_EXTENSIONS)];
